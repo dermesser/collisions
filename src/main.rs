@@ -134,9 +134,11 @@ impl Particle {
     fn bounce_off(&mut self, other: &mut Particle) {
         let conn = self.pos - other.pos;
         if (conn.normsq() > (self.rad * self.rad + other.rad * other.rad)) {
+            // timetohit() predicted that we would be closer than normsq() at this point, but we
+            // are not.
             println!("BUG? {} > {}", conn.normsq(), self.rad * self.rad + other.rad * other.rad);
+            return;
         }
-        //assert!(conn.normsq() <= (self.rad * self.rad + other.rad * other.rad));
 
         // Determine orthogonal bounce plane.
         let connu = conn.unit();
@@ -347,7 +349,7 @@ impl System {
 fn render_3_particles() {
     use std::io::Write;
 
-    let mut sys = System::new(10., 1e4 as usize, 20);
+    let mut sys = System::new(10., 1e3 as usize, 50);
     let mut destfile = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
@@ -361,7 +363,7 @@ fn render_3_particles() {
     });
 
     // limit, redrawhz, steps
-    sys.simulate(10e6 as usize, 10, 10000, Some(render_cb));
+    sys.simulate(10e6 as usize, 5, 10000, Some(render_cb));
 }
 
 fn main() {
