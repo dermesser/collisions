@@ -299,10 +299,12 @@ impl System {
                     continue;
                 }
 
-                // Still valid?
+                // Events still valid - only if participating particles have not collided otherwise
+                // in the meantime.
                 match next.typ {
                     EventType::HorizWall(p) | EventType::VertWall(p) => {
                         if self.particle_for(p).coll > next.coll {
+                            // Important to not allow particles to leave the box.
                             self.predict_collisions(p, limit);
                             continue;
                         }
