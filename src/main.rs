@@ -347,7 +347,7 @@ impl System {
 fn render_3_particles() {
     use std::io::Write;
 
-    let mut sys = System::new(10., 1e4 as usize, 50);
+    let mut sys = System::new(10., 1e4 as usize, 20);
     let mut destfile = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
@@ -361,7 +361,7 @@ fn render_3_particles() {
     });
 
     // limit, redrawhz, steps
-    sys.simulate(10e6 as usize, 10, 100000, Some(render_cb));
+    sys.simulate(10e6 as usize, 10, 10000, Some(render_cb));
 }
 
 fn main() {
