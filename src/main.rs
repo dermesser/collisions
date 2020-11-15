@@ -53,6 +53,7 @@ impl Vector {
 struct Event {
     typ: EventType,
     when: usize,
+    coll: usize,
 }
 
 impl PartialOrd for Event {
@@ -87,11 +88,9 @@ struct Particle {
 }
 
 impl Particle {
-    fn draw(&self) {
-        unimplemented!()
-    }
     fn mov(&mut self, dt: usize) {
         self.pos = self.pos + self.vel * dt as f32 * TIME_UNIT;
+        assert!(self.pos.0 > -0.1 && self.pos.1 > -0.1);
     }
     fn timetohit(&self, dt: usize, other: &Particle, limit: usize) -> Option<usize> {
         let mut mypos = self.pos;
@@ -99,7 +98,7 @@ impl Particle {
         let mindistsq = self.rad * self.rad + other.rad * other.rad;
         let mut i = 0;
 
-        while (otherpos - mypos).normsq() < mindistsq && i * dt < limit {
+        while (otherpos - mypos).normsq() > mindistsq && i * dt < limit {
             mypos = mypos + self.vel * dt as f32 * TIME_UNIT;
             otherpos = otherpos + other.vel * dt as f32 * TIME_UNIT;
             i += 1;
@@ -113,22 +112,31 @@ impl Particle {
     }
 
     fn timetohit_horiz_wall(&self, y: BaseNum) -> Option<usize> {
-        if (self.pos.1 > y && self.vel.1 > 0.) || (self.pos.1 < y && self.vel.1 < 0.) {
-            None
+        let vert_dist = y - self.pos.1;
+        let timetohit = (vert_dist / self.vel.1) / TIME_UNIT;
+        if y == 0. {
+        }
+        if timetohit > 0. {
+            Some(timetohit as usize)
         } else {
-            Some((((y - self.pos.1).abs() / self.vel.1) / TIME_UNIT as BaseNum) as usize)
+            None
         }
     }
     fn timetohit_vert_wall(&self, x: BaseNum) -> Option<usize> {
-        if (self.pos.0 > x && self.vel.0 > 0.) || (self.pos.0 < x && self.vel.0 < 0.) {
-            None
+        let horiz_dist = x - self.pos.0;
+        let timetohit = (horiz_dist / self.vel.0) / TIME_UNIT;
+        if timetohit > 0. {
+            Some(timetohit as usize)
         } else {
-            Some((((x - self.pos.0).abs() / self.vel.0) / TIME_UNIT as BaseNum) as usize)
+            None
         }
     }
     fn bounce_off(&mut self, other: &mut Particle) {
         let conn = self.pos - other.pos;
-        assert!(conn.normsq() <= (self.rad * self.rad + other.rad * other.rad));
+        if (conn.normsq() > (self.rad * self.rad + other.rad * other.rad)) {
+            println!("BUG? {} > {}", conn.normsq(), self.rad * self.rad + other.rad * other.rad);
+        }
+        //assert!(conn.normsq() <= (self.rad * self.rad + other.rad * other.rad));
 
         // Determine orthogonal bounce plane.
         let connu = conn.unit();
@@ -149,32 +157,17 @@ impl Particle {
 
         self.vel = connu * v1_bounce_after + bounceplane * v1_orth;
         other.vel = connu * v2_bounce_after + bounceplane * v2_orth;
+        assert!(self.pos.0 > 0. && self.pos.1 > 0.);
+        self.coll += 1;
     }
     fn bounce_horiz_wall(&mut self) {
-        self.vel.1 = -self.vel.1
+        self.vel.1 = -self.vel.1;
+        self.coll += 1;
     }
     fn bounce_vert_wall(&mut self) {
-        self.vel.0 = -self.vel.0
+        self.vel.0 = -self.vel.0;
+        self.coll += 1;
     }
-}
-
-fn test_generate_data() {
-    let dt = 0.01;
-    // 2x2 box.
-    let mut p1 = Particle {
-        pos: Vector(0., 0.),
-        vel: Vector(1., 1.),
-        rad: 0.1,
-        mass: 1.,
-        coll: 0,
-    };
-    let mut p2 = Particle {
-        pos: Vector(1., 1.),
-        vel: Vector(-0.9, -0.9),
-        ..p1
-    };
-
-    for i in 0..1000 {}
 }
 
 struct System {
@@ -192,8 +185,8 @@ impl System {
             .map(|_| Particle {
                 pos: Vector(rng.gen_range(0., dim), rng.gen_range(0., dim)),
                 vel: Vector(rng.gen_range(0., dim), rng.gen_range(0., dim)),
-                mass: rng.gen_range(0., 1.),
-                rad: rng.gen_range(0., dim / 100.),
+                mass: rng.gen_range(0., 10.),
+                rad: rng.gen_range(0., dim / 25.),
                 coll: 0,
             })
             .collect::<Vec<Particle>>();
@@ -216,7 +209,10 @@ impl System {
     fn particle_for_mut(&mut self, ph: ParticleHandle) -> &mut Particle {
         &mut self.parts[ph.0]
     }
-    fn for_all_particles<F>(&mut self, f: F) where F: std::ops::Fn(&mut Particle) {
+    fn for_all_particles<F>(&mut self, f: F)
+    where
+        F: std::ops::Fn(&mut Particle),
+    {
         for p in self.parts.iter_mut() {
             f(p);
         }
@@ -224,71 +220,150 @@ impl System {
 
     fn predict_collisions(&mut self, p: ParticleHandle, limit: usize) {
         for (i, other) in self.parts.iter().enumerate() {
+            if i == p.0 {
+                continue;
+            }
             if let Some(tth) = self.particle_for(p).timetohit(self.dt, other, limit) {
                 self.pq.push(Reverse(Event {
                     typ: EventType::PP(p, self.handle_for(i)),
-                    when: (tth / self.dt) as usize,
+                    when: self.t + tth,
+                    coll: self.particle_for(p).coll,
                 }));
             }
         }
-        let particle = self.particle_for(p);
-        let (dtx, dty) = (
-            particle.timetohit_vert_wall(self.dim),
-            particle.timetohit_horiz_wall(self.dim),
-        );
-        if let Some(dtx) = dtx {
+        let particle = self.particle_for(p).clone();
+        if let Some(dtx) = particle.timetohit_vert_wall(0.) {
             if dtx <= limit {
                 self.pq.push(Reverse(Event {
                     typ: EventType::VertWall(p),
                     when: self.t + dtx,
+                    coll: particle.coll,
                 }));
             }
         }
-        if let Some(dty) = dty {
+        if let Some(dtx) = particle.timetohit_vert_wall(self.dim) {
+            if dtx <= limit {
+                self.pq.push(Reverse(Event {
+                    typ: EventType::VertWall(p),
+                    when: self.t + dtx,
+                    coll: particle.coll,
+                }));
+            }
+        }
+        if let Some(dty) = particle.timetohit_horiz_wall(0.) {
             if dty <= limit {
                 self.pq.push(Reverse(Event {
                     typ: EventType::HorizWall(p),
                     when: self.t + dty,
+                    coll: particle.coll,
+                }));
+            }
+        }
+        if let Some(dty) = particle.timetohit_horiz_wall(self.dim) {
+            if dty <= limit {
+                self.pq.push(Reverse(Event {
+                    typ: EventType::HorizWall(p),
+                    when: self.t + dty,
+                    coll: particle.coll,
                 }));
             }
         }
     }
 
-    fn simulate(&mut self, limit: usize, redrawHz: usize) {
+    fn simulate(
+        &mut self,
+        limit: usize,
+        redrawHz: usize,
+        maxsteps: usize,
+        mut render: Option<Box<dyn FnMut(&Vec<Particle>)>>,
+    ) {
         for i in 0..self.parts.len() {
             self.predict_collisions(self.handle_for(i), limit);
         }
-        self.pq.push(Reverse(Event { typ: EventType::Redraw, when: (1./(redrawHz*self.dt) as f32) as usize }));
+        self.pq.push(Reverse(Event {
+            typ: EventType::Redraw,
+            when: (1. / (redrawHz as f32 * TIME_UNIT)) as usize,
+            coll: 0,
+        }));
 
-        while !self.pq.is_empty() {
+        let mut i = 0;
+        while !self.pq.is_empty() && i < maxsteps {
             if let Some(next) = self.pq.pop() {
                 let next = next.0;
-                let dt = next.when;
-                let t = self.t + dt;
-                self.for_all_particles(|p| p.mov(dt));
+                if next.when <= self.t {
+                    continue;
+                }
+
+                // Still valid?
                 match next.typ {
-                    EventType::Redraw => {},
+                    EventType::HorizWall(p) | EventType::VertWall(p) | EventType::PP(p, _) => {
+                        if self.particle_for(p).coll > next.coll {
+                            continue;
+                        }
+                    },
+                    _ => {}
+                }
+
+                let dt = next.when - self.t;
+                self.t = next.when;
+                self.for_all_particles(|p| p.mov(dt));
+                // Render on every collision.
+                if let Some(ref mut render_cb) = render {
+                    render_cb(&self.parts);
+                }
+
+                match next.typ {
+                    EventType::Redraw => {
+                        //self.pq.push(Reverse(Event {
+                        //    typ: EventType::Redraw,
+                        //    when: self.t + (1. / (TIME_UNIT * redrawHz as f32)) as usize,
+                        //    coll: 0,
+                        //}));
+                    }
                     EventType::HorizWall(p) => {
                         self.particle_for_mut(p).bounce_horiz_wall();
                         self.predict_collisions(p, limit);
-                    },
+                    }
                     EventType::VertWall(p) => {
                         self.particle_for_mut(p).bounce_vert_wall();
                         self.predict_collisions(p, limit);
-                    },
+                    }
                     EventType::PP(p1, p2) => {
                         let mut pm1 = self.parts[p1.0].clone();
                         let mut pm2 = self.parts[p2.0].clone();
                         pm1.bounce_off(&mut pm2);
                         self.parts[p1.0] = pm1;
                         self.parts[p2.0] = pm2;
-                    },
+                        self.predict_collisions(p1, limit);
+                        self.predict_collisions(p2, limit);
+                    }
                 }
             }
+            i += 1;
         }
     }
 }
 
+fn render_3_particles() {
+    use std::io::Write;
+
+    let mut sys = System::new(10., 1e4 as usize, 50);
+    let mut destfile = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .open("render.csv")
+        .unwrap();
+    let render_cb = Box::new(move |parts: &Vec<Particle>| {
+        for p in parts.iter() {
+            write!(destfile, "{:.2}, {:.2}, ", p.pos.0, p.pos.1);
+        }
+        write!(destfile, "\n");
+    });
+
+    // limit, redrawhz, steps
+    sys.simulate(10e6 as usize, 10, 100000, Some(render_cb));
+}
+
 fn main() {
-    println!("Hello, world!");
+    render_3_particles();
 }
