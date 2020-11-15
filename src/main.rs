@@ -95,7 +95,7 @@ impl Particle {
     fn timetohit(&self, dt: usize, other: &Particle, limit: usize) -> Option<usize> {
         let mut mypos = self.pos;
         let mut otherpos = other.pos;
-        let mindistsq = self.rad * self.rad + other.rad * other.rad;
+        let mindistsq = (self.rad+other.rad)*(self.rad+other.rad);
         let mut i = 0;
 
         while (otherpos - mypos).normsq() > mindistsq && i * dt < limit {
@@ -133,13 +133,15 @@ impl Particle {
     }
     fn bounce_off(&mut self, other: &mut Particle) {
         let conn = self.pos - other.pos;
-        if (conn.normsq() > (self.rad * self.rad + other.rad * other.rad)) {
+        let mindistsq = (self.rad+other.rad)*(self.rad+other.rad);
+        if (conn.normsq() > mindistsq) {
             // timetohit() predicted that we would be closer than normsq() at this point, but we
             // are not.
             println!("BUG? {} > {}", conn.normsq(), self.rad * self.rad + other.rad * other.rad);
             return;
         }
 
+        println!("OK");
         // Determine orthogonal bounce plane.
         let connu = conn.unit();
         let bounceplane = connu.orth();
@@ -161,6 +163,7 @@ impl Particle {
         other.vel = connu * v2_bounce_after + bounceplane * v2_orth;
         assert!(self.pos.0 > 0. && self.pos.1 > 0.);
         self.coll += 1;
+        other.coll += 1;
     }
     fn bounce_horiz_wall(&mut self) {
         self.vel.1 = -self.vel.1;
@@ -188,7 +191,7 @@ impl System {
                 pos: Vector(rng.gen_range(0., dim), rng.gen_range(0., dim)),
                 vel: Vector(rng.gen_range(0., dim), rng.gen_range(0., dim)),
                 mass: rng.gen_range(0., 10.),
-                rad: rng.gen_range(0., dim / 25.),
+                rad: rng.gen_range(0., dim / 15.),
                 coll: 0,
             })
             .collect::<Vec<Particle>>();
@@ -229,7 +232,7 @@ impl System {
                 self.pq.push(Reverse(Event {
                     typ: EventType::PP(p, self.handle_for(i)),
                     when: self.t + tth,
-                    coll: self.particle_for(p).coll,
+                    coll: self.particle_for(p).coll+other.coll,
                 }));
             }
         }
@@ -298,8 +301,14 @@ impl System {
 
                 // Still valid?
                 match next.typ {
-                    EventType::HorizWall(p) | EventType::VertWall(p) | EventType::PP(p, _) => {
+                    EventType::HorizWall(p) | EventType::VertWall(p) => {
                         if self.particle_for(p).coll > next.coll {
+                            self.predict_collisions(p, limit);
+                            continue;
+                        }
+                    },
+                    EventType::PP(p1, p2) => {
+                        if self.particle_for(p1).coll+self.particle_for(p2).coll > next.coll {
                             continue;
                         }
                     },
@@ -349,7 +358,7 @@ impl System {
 fn render_3_particles() {
     use std::io::Write;
 
-    let mut sys = System::new(10., 1e3 as usize, 50);
+    let mut sys = System::new(10., 1e3 as usize, 20);
     let mut destfile = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
